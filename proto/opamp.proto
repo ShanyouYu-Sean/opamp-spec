@@ -25,8 +25,8 @@ option go_package = "github.com/open-telemetry/opamp-go/protobufs";
 message AgentToServer {
     // Globally unique identifier of the running instance of the Agent. SHOULD remain
     // unchanged for the lifetime of the Agent process.
-    // MUST be 16 bytes long and SHOULD be generated using the UUID v7 spec.
-    bytes instance_uid = 1;
+    // Recommended format: https://github.com/ulid/spec
+    string instance_uid = 1;
 
     // The sequence number is incremented by 1 for every AgentToServer sent
     // by the Agent. This allows the Server to detect that it missed a message when
@@ -91,10 +91,6 @@ message AgentToServer {
     // A custom message sent from an Agent to the Server.
     // Status: [Development]
     CustomMessage custom_message = 13;
-
-    // A message indicating the components that are available for configuration on the agent.
-    // Status: [Development]
-    AvailableComponents available_components = 14;
 }
 
 enum AgentToServerFlags {
@@ -144,50 +140,15 @@ message OpAMPConnectionSettingsRequest {
 message CertificateRequest {
     // PEM-encoded Client Certificate Signing Request (CSR), signed by client's private key.
     // The Server SHOULD validate the request and SHOULD respond with a
-    // OpAMPConnectionSettings where the certificate.cert contains the issued
+    // OpAMPConnectionSettings where the certificate.public_key contains the issued
     // certificate.
     bytes csr = 1;
 }
 
-// AvailableComponents contains metadata relating to the components included
-// within the agent.
-// status: [Development]
-message AvailableComponents {
-    // A map of a unique component ID to details about the component.
-    // This may be omitted from the message if the server has not
-    // explicitly requested it be sent by setting the ReportAvailableComponents
-    // flag in the previous ServerToAgent message.
-    map<string, ComponentDetails> components = 1;
-
-    // Agent-calculated hash of the components.
-    // This hash should be included in every AvailableComponents message.
-    bytes hash = 2;
- }
-
-message ComponentDetails {
-    // Extra key/value pairs that may be used to describe the component.
-    // The key/value pairs are according to semantic conventions, see:
-    // https://opentelemetry.io/docs/specs/semconv/
-    //
-    // For example, you may use the "code" semantic conventions to
-    // report the location of the code for a specific component:
-    // https://opentelemetry.io/docs/specs/semconv/attributes-registry/code/
-    //
-    // Or you may use the "vcs" semantic conventions to report the
-    // repository the component may be a part of:
-    // https://opentelemetry.io/docs/specs/semconv/attributes-registry/vcs/
-    repeated KeyValue metadata = 1;
-
-    // A map of component ID to sub components details. It can nest as deeply as needed to
-    // describe the underlying system.
-    map<string, ComponentDetails> sub_component_map = 2;
-}
-
-
 message ServerToAgent {
     // Agent instance uid. MUST match the instance_uid field in AgentToServer message.
     // Used for multiplexing messages from/to multiple agents using one message stream.
-    bytes instance_uid = 1;
+    string instance_uid = 1;
 
     // error_response is set if the Server wants to indicate that something went wrong
     // during processing of an AgentToServer message. If error_response is set then
@@ -251,13 +212,6 @@ enum ServerToAgentFlags {
     // AgentToServer.sequence_num values.
     // The Server asks the Agent to report full status.
     ServerToAgentFlags_ReportFullState = 0x00000001;
-
-    // ReportAvailableComponents flag can be used by the server if the Agent did
-    // not include the full AvailableComponents message, but only the hash.
-    // If this flag is specified, the agent will populate available_components.components
-    // with a full description of the agent's components.
-    // Status: [Development]
-    ServerToAgentFlags_ReportAvailableComponents = 0x00000002;
 }
 
 enum ServerCapabilities {
@@ -310,19 +264,6 @@ message OpAMPConnectionSettings {
     // This field is optional: if omitted the client SHOULD NOT use a client-side certificate.
     // This field can be used to perform a client certificate revocation/rotation.
     TLSCertificate certificate = 3;
-
-    // The Agent MUST periodically send an AgentToServer message if the
-    // AgentCapabilities_ReportsHeartbeat capability is true. At a minimum the instance_uid
-    // field MUST be set.
-    //
-    // An HTTP Client MUST use the value as polling interval, if heartbeat_interval_seconds is non-zero.
-    //
-    // A heartbeat is used to keep the connection active and inform the server that the Agent
-    // is still alive and active.
-    //
-    // If this field has no value or is set to 0, the Agent should not send any heartbeats.
-    // Status: [Development]
-    uint64 heartbeat_interval_seconds = 4;
 }
 
 // The TelemetryConnectionSettings message is a collection of fields which comprise an
@@ -409,8 +350,8 @@ message Header {
 
 // Status: [Beta]
 message TLSCertificate {
-    // The (cert,private_key) pair should be issued and signed by a Certificate
-    // Authority (CA) that the destination Server recognizes.
+    // The (public_key,private_key) certificate pair should be issued and
+    // signed by a Certificate Authority that the destination Server recognizes.
     //
     // It is highly recommended that the private key of the CA certificate is NOT
     // stored on the destination Server otherwise compromising the Server will allow
@@ -422,19 +363,19 @@ message TLSCertificate {
     // Alternatively the certificate may be self-signed, assuming the Server can
     // verify the certificate.
 
-    // PEM-encoded certificate. Required.
-    bytes cert = 1;
+    // PEM-encoded public key of the certificate. Required.
+    bytes public_key = 1;
 
     // PEM-encoded private key of the certificate. Required.
     bytes private_key = 2;
 
-    // PEM-encoded certificate of the signing CA.
+    // PEM-encoded public key of the CA that signed this certificate.
     // Optional. MUST be specified if the certificate is CA-signed.
     // Can be stored by TLS-terminating intermediary proxies in order to verify
     // the connecting client's certificate in the future.
     // It is not recommended that the Agent accepts this CA as an authority for
     // any purposes.
-    bytes ca_cert = 3;
+    bytes ca_public_key = 3;
 }
 
 // Status: [Beta]
@@ -561,14 +502,6 @@ message DownloadableFile {
     // https://github.com/open-telemetry/opamp-spec/blob/main/specification.md#code-signing
     // for recommendations.
     bytes signature = 3;
-
-    // Optional headers to use when downloading a file. Typically used to set
-    // access tokens or other authorization headers. For HTTP-based protocols
-    // the Agent should set these in the request headers.
-    // For example:
-    // key="Authorization", Value="Basic YWxhZGRpbjpvcGVuc2VzYW1l".
-    // Status: [Development]
-    Headers headers = 4;
 }
 
 message ServerErrorResponse {
@@ -631,7 +564,7 @@ message AgentDescription {
     //   Agent type, e.g. "io.opentelemetry.collector"
     // - service.namespace if it is used in the environment where the Agent runs.
     // - service.version should be set to version number of the Agent build.
-    // - service.instance.id should be set. It may be set equal to the Agent's
+    // - service.instance.id should be set. It may be be set equal to the Agent's
     //   instance uid (equal to ServerToAgent.instance_uid field) or any other value
     //   that uniquely identifies the Agent in combination with other attributes.
     // - any other attributes that are necessary for uniquely identifying the Agent's
@@ -702,16 +635,7 @@ enum AgentCapabilities {
     AgentCapabilities_ReportsHealth                  = 0x00000800;
     // The Agent will report RemoteConfig status via AgentToServer.remote_config_status field.
     AgentCapabilities_ReportsRemoteConfig            = 0x00001000;
-    // The Agent can report heartbeats.
-    // This is specified by the ServerToAgent.OpAMPConnectionSettings.heartbeat_interval_seconds field.
-    // If this capability is true, but the Server does not set a heartbeat_interval_seconds field, the
-    // Agent should use its own configured interval, which by default will be 30s. The Server may not
-    // know the configured interval and should not make assumptions about it.
-    // Status: [Development]
-    AgentCapabilities_ReportsHeartbeat               = 0x00002000;
-    // The agent will report AvailableComponents via the AgentToServer.available_components field.
-    // Status: [Development]
-    AgentCapabilities_ReportsAvailableComponents     = 0x00004000;
+
     // Add new capabilities here, continuing with the least significant unused bit.
 }
 
@@ -746,6 +670,9 @@ message ComponentHealth {
 message EffectiveConfig {
     // The effective config of the Agent.
     AgentConfigMap config_map = 1;
+
+    // The effective config status of the Agent.
+    RemoteConfigStatusMap status_map = 2;
 }
 
 message RemoteConfigStatus {
@@ -760,6 +687,9 @@ message RemoteConfigStatus {
 
     // Optional error message if status==FAILED.
     string error_message = 3;
+
+    // Optional additional message
+    string additional_message = 4;
 }
 
 enum RemoteConfigStatuses {
@@ -775,6 +705,10 @@ enum RemoteConfigStatuses {
     // Agent tried to apply the config received earlier, but it failed.
     // See error_message for more details.
     RemoteConfigStatuses_FAILED = 3;
+
+    RemoteConfigStatuses_DELETING = 4;
+
+    RemoteConfigStatuses_DELETED = 5;
 }
 
 // The PackageStatuses message describes the status of all packages that the Agent
@@ -851,22 +785,6 @@ message PackageStatus {
 
     // Error message if the status is erroneous.
     string error_message = 7;
-
-    // Optional details that may be of interest to a user.
-    // Should only be set if status is Downloading.
-    // Status: [Development]
-    PackageDownloadDetails download_details = 8;
-}
-
-
-// Additional details that an agent can use to describe an in-progress package download.
-// Status: [Development]
-message PackageDownloadDetails {
-    // The package download progress as a percentage.
-    double download_percent = 1;
-
-    // The current package download rate in bytes per second.
-    double download_bytes_per_second = 2;
 }
 
 // The status of this package.
@@ -879,7 +797,7 @@ enum PackageStatusEnum {
     // Installation of this package has not yet started.
     PackageStatusEnum_InstallPending = 1;
 
-    // Agent is currently installing the package.
+    // Agent is currently downloading and installing the package.
     // server_offered_hash field MUST be set to indicate the version that the
     // Agent is installing. The error_message field MUST NOT be set.
     PackageStatusEnum_Installing = 2;
@@ -889,12 +807,6 @@ enum PackageStatusEnum {
     // tried to install. The error_message may also contain more details about
     // the failure.
     PackageStatusEnum_InstallFailed = 3;
-
-    // Agent is currently downloading the package.
-    // server_offered_hash field MUST be set to indicate the version that the
-    // Agent is installing. The error_message field MUST NOT be set.
-    // Status: [Development]
-    PackageStatusEnum_Downloading = 4;
 }
 
 // Properties related to identification of the Agent, which can be overridden
@@ -902,8 +814,7 @@ enum PackageStatusEnum {
 message AgentIdentification {
     // When new_instance_uid is set, Agent MUST update instance_uid
     // to the value provided and use it for all further communication.
-    // MUST be 16 bytes long and SHOULD be generated using the UUID v7 spec.
-    bytes new_instance_uid = 1;
+    string new_instance_uid = 1;
 }
 
 /////////////////////////////////////////////////////////////////////////////////////
@@ -936,6 +847,14 @@ message AgentConfigMap {
     // For agents that use a single config file or section the map SHOULD contain a single
     // entry and the key may be an empty string.
     map<string, AgentConfigFile> config_map = 1;
+}
+
+message RemoteConfigStatusMap {
+    // Map of config status. Keys are config file names or config section names.
+    // The configuration is assumed to be a collection of one or more named config status.
+    // For agents that use a single config file or section the map SHOULD contain a single
+    // entry and the key may be an empty string.
+    map<string, RemoteConfigStatus> status_map = 1;
 }
 
 message AgentConfigFile {
